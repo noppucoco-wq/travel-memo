@@ -72,6 +72,13 @@ details.card[open]{gap:12px}
 .recent button b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recent button span{color:var(--muted);font-size:12px}
 .empty{color:var(--muted);font-size:13px}
+.dblist{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto}
+.dbitem{display:grid;grid-template-columns:1fr auto;gap:2px 10px;text-align:left;font:inherit;font-size:13.5px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:9px 11px;cursor:pointer;line-height:1.35}
+.dbitem b{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.dbitem span{color:var(--muted);font-size:12px}
+.dbitem time{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;text-align:right}
+.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--ink)}
+.pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)}
 
 /* ตัวอย่างเอกสาร */
 .previewCol{position:sticky;top:12px;min-width:0}
@@ -137,7 +144,7 @@ details.card[open]{gap:12px}
   <header class="top">
     <div>
       <h1>ขอไปราชการ</h1>
-      <p>บันทึกขออนุมัติเดินทาง และขอใช้รถยนต์ส่วนตัว · สพป.ลำปาง เขต ๒ · รุ่น 4</p>
+      <p>บันทึกขออนุมัติเดินทาง และขอใช้รถยนต์ส่วนตัว · สพป.ลำปาง เขต ๒ · รุ่น 5</p>
     </div>
   </header>
 
@@ -152,6 +159,16 @@ details.card[open]{gap:12px}
       <section class="card" id="recentCard">
         <h2>ใช้ข้อมูลจากเรื่องเดิม <small>แตะเพื่อดึงชื่อเรื่อง สถานที่ ระยะทาง มาใช้</small></h2>
         <div class="recent" id="recent"></div>
+      </section>
+
+      <section class="card" id="dbCard" hidden>
+        <h2>ฐานข้อมูลการไปราชการ <span class="pill" id="dbStatus">ยังไม่เชื่อมต่อ</span></h2>
+        <p class="sub" id="dbHelp">ทุกครั้งที่กดสร้าง PDF ระบบบันทึกข้อมูลพร้อมเวลาลง Google Sheets ให้อัตโนมัติ แตะรายการเพื่อดึงกลับมาใช้</p>
+        <div class="row-inline">
+          <label class="fld">ค้นหา<input id="dbSearch" placeholder="ชื่อเรื่อง สถานที่ หรือเดือน"></label>
+          <button type="button" class="btn" id="dbReload">โหลดใหม่</button>
+        </div>
+        <div class="dblist" id="dbList"></div>
       </section>
 
       <section class="card">
@@ -248,6 +265,13 @@ details.card[open]{gap:12px}
           <label class="fld">ทะเบียน + จังหวัด<input id="newCarPlate" placeholder="ยต-๖๘๘๗ เชียงใหม่"></label>
         </div>
         <button type="button" class="btn" id="addCar">เพิ่มรถ</button>
+        <div id="dbSettings" hidden style="display:flex;flex-direction:column;gap:10px">
+          <h2 style="margin-top:4px">เชื่อมฐานข้อมูล Google Sheets</h2>
+          <label class="fld">URL ของ Web App<input id="dbUrl" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
+          <label class="fld">รหัสผ่าน (ตรงกับ SECRET ในสคริปต์)<input id="dbKey"></label>
+          <div class="row-inline"><button type="button" class="btn" id="dbTest">ทดสอบการเชื่อมต่อ</button><button type="button" class="btn" id="dbLink">คัดลอกลิงก์ตั้งค่าสำหรับเครื่องอื่น</button></div>
+          <p class="sub" id="dbTestMsg"></p>
+        </div>
       </details>
     </div>
 
@@ -293,6 +317,8 @@ const DEFAULT = {
   places:{'โรงแรมเชียงใหม่ออคิด':{district:'เมือง', province:'เชียงใหม่', distance:102}},
   titles:['การประชุมเชิงปฏิบัติการเพิ่มประสิทธิภาพระบบประชุมทางไกลและระบบผลิตสื่อวิดีทัศน์'],
   history:[],
+  db:{url:'', key:''},
+  pending:[],
   trip:{ title:'การประชุมเชิงปฏิบัติการเพิ่มประสิทธิภาพระบบประชุมทางไกลและระบบผลิตสื่อวิดีทัศน์',
     place:'โรงแรมเชียงใหม่ออคิด', district:'เมือง', province:'เชียงใหม่',
     startDate:'2025-06-02', endDate:'2025-06-06', startTime:'06.00', endTime:'24.00',
@@ -620,12 +646,14 @@ async function makePdf(){
     const blob = pdf.output('blob');
     const name = `ขอไปราชการ_${(T().place||'').slice(0,30)}_${shortDate(T().startDate).replace(/\s/g,'')}.pdf`.replace(/[\\/:*?"<>|]/g,'');
     remember();
+    const rec = buildRecord();
     const dl = await getDownloads();
     if(dl){
       try{ await dl.save({filename:name, data:blob}); flash('บันทึก PDF แล้ว เปิดไฟล์เพื่อสั่งพิมพ์ได้เลย','ok'); }
       catch(err){ if(err && err.code === 'declined') flash('ยกเลิกการบันทึก','warn'); else if(err && err.code === 'rate_limited') flash('มีหน้าต่างบันทึกเปิดอยู่ ลองอีกครั้ง','warn'); else showFallback(canvases); }
     } else if(window.__STANDALONE__){ pdf.save(name); flash('บันทึก PDF แล้ว เปิดไฟล์เพื่อสั่งพิมพ์ได้เลย','ok'); }
     else showFallback(canvases);
+    if(STANDALONE && S.db.url){ dbSave(rec).then(ok => flash(ok ? 'บันทึก PDF และบันทึกลงฐานข้อมูลแล้ว' : 'บันทึก PDF แล้ว แต่ส่งเข้าฐานข้อมูลไม่สำเร็จ ระบบจะส่งให้อีกครั้งภายหลัง', ok ? 'ok' : 'warn')); }
   }catch(e){ console.error(e); flash('สร้าง PDF ไม่สำเร็จ ลองอีกครั้ง','warn'); }
   finally{ btn.disabled = false; btn.textContent = 'สร้าง PDF'; }
 }
@@ -636,8 +664,88 @@ function showFallback(canvases){
   flash('แสดงภาพเอกสารด้านล่างแทน','warn');
 }
 
+/* ---------- ฐานข้อมูล Google Sheets ---------- */
+const STANDALONE = !!window.__STANDALONE__;
+const BUDGET_L = Object.fromEntries(BUDGETS), VEHICLE_L = Object.fromEntries(VEHICLES);
+function buildRecord(){
+  const tr = T(), pr = P(), car = S.cars[tr.car] || {}, priv = tr.vehicle === 'private', rt = (+tr.distance||0)*2;
+  return { id: Date.now().toString(36) + Math.random().toString(36).slice(2,6), savedAt: new Date().toISOString(),
+    docDate: thDate(tr.docDate), name: pr.name, position: pr.position, title: tr.title, place: tr.place,
+    district: tr.district, province: tr.province, startDate: thDate(tr.startDate), endDate: thDate(tr.endDate),
+    time: `${tr.startTime} - ${tr.endTime}`, days: dayCount(), companions: tr.companions.join(', '),
+    budget: BUDGET_L[tr.budget] || '', vehicle: VEHICLE_L[tr.vehicle] || '',
+    car: priv ? `${car.brand||''} ${car.plate||''}`.trim() : '', distance: priv ? rt : '', amount: priv ? rt*(+pr.rate||0) : '',
+    trip: JSON.stringify({...tr, _refTouched: undefined}) };
+}
+async function dbPost(rec){
+  const r = await fetch(S.db.url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({key:S.db.key, record:rec})});
+  const j = await r.json(); if(!j.ok) throw new Error(j.error || 'failed'); return j;
+}
+async function dbSave(rec){
+  try{ await dbPost(rec); await flushPending(); dbLoad(); return true; }
+  catch(e){ S.pending.push(rec); save(); setDbStatus(); return false; }
+}
+async function flushPending(){
+  while(S.pending.length){ try{ await dbPost(S.pending[0]); S.pending.shift(); save(); }catch(e){ break; } }
+  setDbStatus();
+}
+let dbRows = [], dbState = 'off';
+function setDbStatus(text, kind){
+  const el = $('dbStatus'); if(!el) return;
+  if(!S.db.url){ el.textContent = 'ยังไม่เชื่อมต่อ'; el.className = 'pill'; return; }
+  if(text){ el.textContent = text; el.className = 'pill ' + (kind||''); return; }
+  el.textContent = S.pending.length ? `รอส่ง ${S.pending.length} รายการ` : (dbState === 'ok' ? 'เชื่อมต่อแล้ว' : 'ยังโหลดไม่สำเร็จ');
+  el.className = 'pill ' + (S.pending.length || dbState !== 'ok' ? 'warn' : 'ok');
+}
+async function dbLoad(){
+  const list = $('dbList');
+  if(!S.db.url){ list.innerHTML = '<span class="empty">ยังไม่ได้เชื่อม Google Sheets ตั้งค่าได้ในส่วน "ข้อมูลประจำตัว" ด้านล่าง</span>'; setDbStatus(); return; }
+  setDbStatus('กำลังโหลด…');
+  try{
+    const r = await fetch(`${S.db.url}?action=list&limit=100&key=${encodeURIComponent(S.db.key)}`);
+    const j = await r.json(); if(!j.ok) throw new Error(j.error);
+    dbRows = j.rows.map(x => { let t = {}; try{ t = JSON.parse(x.trip); }catch(e){} return {...x, t}; });
+    dbState = 'ok';
+  }catch(e){ dbState = 'err'; }
+  setDbStatus(); renderDbList();
+}
+function renderDbList(){
+  const list = $('dbList'), q = ($('dbSearch').value || '').trim();
+  if(dbState === 'err'){ list.innerHTML = '<span class="empty">โหลดข้อมูลไม่สำเร็จ ตรวจ URL และรหัสผ่านในส่วนตั้งค่า แล้วกด "โหลดใหม่"</span>'; return; }
+  const rows = dbRows.filter(x => !q || [x.t.title, x.t.place, x.t.province, thDate(x.t.startDate), shortDate(x.t.startDate)].join(' ').includes(q));
+  if(!rows.length){ list.innerHTML = `<span class="empty">${dbRows.length ? 'ไม่พบรายการที่ค้นหา' : 'ยังไม่มีข้อมูล รายการแรกจะเข้ามาเมื่อกดสร้าง PDF'}</span>`; return; }
+  list.innerHTML = '';
+  rows.forEach(x => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'dbitem';
+    const saved = new Date(x.savedAt);
+    b.innerHTML = `<b>${esc(x.t.title || '(ไม่มีชื่อเรื่อง)')}</b><time>${isNaN(saved) ? '' : esc(shortDate(iso(saved)) + ' ' + saved.toTimeString().slice(0,5))}</time><span>${esc(x.t.place||'')} · ${esc(shortDate(x.t.startDate))}${x.t.endDate && x.t.endDate !== x.t.startDate ? '–' + esc(shortDate(x.t.endDate)) : ''}</span><span></span>`;
+    b.onclick = () => { if(x.t && x.t.title !== undefined){ S.trip = {...DEFAULT.trip, ...x.t}; commit(); flash('ดึงข้อมูลจากฐานข้อมูลแล้ว แก้วันที่แล้วสร้าง PDF ได้เลย','ok'); window.scrollTo({top:0}); } };
+    list.appendChild(b);
+  });
+}
+function initDb(){
+  if(!STANDALONE) return;
+  $('dbCard').hidden = false; $('dbSettings').hidden = false;
+  // ตั้งค่าจากลิงก์ ?db=...&k=...
+  try{ const u = new URL(location.href), db = u.searchParams.get('db');
+    if(db){ S.db = {url: db, key: u.searchParams.get('k') || ''}; save(); u.searchParams.delete('db'); u.searchParams.delete('k'); history.replaceState(null, '', u.pathname + (u.search || '') + u.hash); flash('ตั้งค่าฐานข้อมูลจากลิงก์แล้ว','ok'); } }catch(e){}
+  $('dbUrl').value = S.db.url; $('dbKey').value = S.db.key;
+  $('dbUrl').addEventListener('change', e => { S.db.url = e.target.value.trim(); save(); dbLoad(); });
+  $('dbKey').addEventListener('change', e => { S.db.key = e.target.value.trim(); save(); dbLoad(); });
+  $('dbReload').onclick = () => { flushPending().then(dbLoad); };
+  $('dbSearch').addEventListener('input', renderDbList);
+  $('dbTest').onclick = async () => { const m = $('dbTestMsg'); m.textContent = 'กำลังทดสอบ…';
+    try{ const r = await fetch(`${S.db.url}?action=ping&key=${encodeURIComponent(S.db.key)}`); const j = await r.json();
+      m.textContent = j.ok ? `เชื่อมต่อสำเร็จ · ชีต "${j.sheet}" มี ${j.count} รายการ` : `เชื่อมต่อได้ แต่ ${j.error}`; }
+    catch(e){ m.textContent = 'เชื่อมต่อไม่ได้ ตรวจว่า URL ลงท้ายด้วย /exec และตั้งสิทธิ์เป็น "ทุกคน" (Anyone)'; } };
+  $('dbLink').onclick = async () => { const link = `${location.origin}${location.pathname}?db=${encodeURIComponent(S.db.url)}&k=${encodeURIComponent(S.db.key)}`;
+    try{ await navigator.clipboard.writeText(link); $('dbTestMsg').textContent = 'คัดลอกลิงก์แล้ว เปิดลิงก์นี้บนมือถือหรือแท็บเล็ตเพื่อตั้งค่าอัตโนมัติ'; }
+    catch(e){ $('dbTestMsg').textContent = link; } };
+  flushPending().then(dbLoad);
+}
+
 /* ---------- เริ่ม ---------- */
-buildStatic(); bind(); syncForm();
+buildStatic(); bind(); syncForm(); initDb();
 (document.fonts ? document.fonts.load('400 16pt THSarabunNew').then(() => document.fonts.load('700 16pt THSarabunNew')) : Promise.resolve()).finally(renderPreview);
 getDownloads();
 </script>
